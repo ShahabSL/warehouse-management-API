@@ -75,7 +75,7 @@ CREATE TABLE `customer` (
   `custId` varchar(255) NOT NULL,
   `custName` varchar(255) DEFAULT NULL,
   `custPhoto` varchar(255) DEFAULT NULL,
-  `custAdresse` varchar(255) DEFAULT NULL,
+  `custAddress` varchar(255) DEFAULT NULL,
   `custEmail` varchar(255) DEFAULT NULL,
   `custMPhone` varchar(255) DEFAULT NULL,
   `custPhone` varchar(255) DEFAULT NULL,

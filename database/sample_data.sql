@@ -35,7 +35,7 @@ INSERT INTO `highdemand` (`prodname`) VALUES
 ('Standard Copper Wire 1.5mm');
 
 -- Sample Customer(s)
-INSERT INTO `customer` (`custId`, `custName`, `custPhoto`, `custAdresse`, `custEmail`, `custMPhone`, `custPhone`) VALUES
+INSERT INTO `customer` (`custId`, `custName`, `custPhoto`, `custAddress`, `custEmail`, `custMPhone`, `custPhone`) VALUES
 ('cust-001', 'ACME Corp', '/images/cust-001.png', '1 Business Park', 'contact@acme.com', '555-8000', '555-8001');
 
 -- --- Related Entities (Examples) ---

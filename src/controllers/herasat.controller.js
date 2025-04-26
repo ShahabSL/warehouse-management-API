@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const axios = require('axios'); // For SMS sending
+const { v4: uuidv4 } = require('uuid');
 
 // Get Manufacturer Names
 const getManufacturerNames = async (req, res) => {
@@ -142,13 +143,13 @@ const createTransport = async (req, res) => {
 
         // 1. Insert into transports table, ensuring order is 'Security Checked'
         const insertTransportQuery = `
-            INSERT INTO transports (tpId, orderId, tpDriverName, tpSituation, custAdresse, tpDate)
+            INSERT INTO transports (tpId, orderId, tpDriverName, tpSituation, custAddress, tpDate)
             SELECT 
                 CONCAT('tp', FLOOR(RAND() * 1000000)) AS tpId,
                 o.ordId AS orderId,
                 ? AS tpDriverName,
                 'در مسیر' AS tpSituation,
-                c.custAdresse AS custAdresse,
+                c.custAddress AS custAddress,
                 NOW() AS tpDate
             FROM xicorana.order o
             JOIN customer c ON o.custId = c.custId
@@ -186,12 +187,12 @@ const createTransport = async (req, res) => {
 
         // 4. Send SMS (outside transaction) - Consider moving to a background job later
         try {
-            const getCustomerInfoQuery = `SELECT custAdresse, custMPhone FROM xicorana.customer WHERE custId = (SELECT custId FROM xicorana.order WHERE ordId = ?);`;
+            const getCustomerInfoQuery = `SELECT custAddress, custMPhone FROM xicorana.customer WHERE custId = (SELECT custId FROM xicorana.order WHERE ordId = ?);`;
             const [customerInfo] = await pool.query(getCustomerInfoQuery, [orderId]);
 
             if (customerInfo.length > 0) {
                 const phoneNumber = String(customerInfo[0].custMPhone);
-                const custAddress = String(customerInfo[0].custAdresse);
+                const custAddress = String(customerInfo[0].custAddress);
                 const smsText = `سفارش به شماره ${orderId} به مقصد ${custAddress} رهسپار شد. اطلاعات راننده به شرح زیر است:\n${tpDriverName}\nسامانه ردیابی افشان نگار آریا`;
                 
                 console.log("Attempting to send SMS to:", phoneNumber);
@@ -226,6 +227,35 @@ const createTransport = async (req, res) => {
     }
 };
 
+const getOrderCustomerInfo = async (req, res) => {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+        return res.status(400).json({ success: false, error: 'شناسه سفارش الزامی است' });
+    }
+
+    try {
+        const getCustomerInfoQuery = `SELECT custAddress, custMPhone FROM xicorana.customer WHERE custId = (SELECT custId FROM xicorana.order WHERE ordId = ?);`;
+        const [customerInfo] = await pool.query(getCustomerInfoQuery, [orderId]);
+
+        if (customerInfo.length === 0) {
+            return res.status(404).json({ success: false, error: 'اطلاعات مشتری برای این سفارش یافت نشد' });
+        }
+
+        const custAddress = String(customerInfo[0].custAddress);
+        const custPhone = String(customerInfo[0].custMPhone);
+
+        res.json({ 
+            success: true, 
+            custAddress, 
+            custPhone 
+        });
+
+    } catch (error) {
+        console.error('Error fetching customer info for order:', error);
+        res.status(500).json({ success: false, error: 'خطا در بازیابی اطلاعات مشتری' });
+    }
+};
 
 module.exports = {
     getManufacturerNames,
@@ -234,4 +264,5 @@ module.exports = {
     setOrderSecurityChecked,
     isOrderSecurityChecked,
     createTransport,
+    getOrderCustomerInfo,
 }; 
