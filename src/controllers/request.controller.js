@@ -31,40 +31,42 @@ const getPendingRequests = async (req, res) => {
 // Update Request Status (Approve/Reject)
 const updateRequestStatus = async (req, res) => {
     const reqId = req.params.reqId;
-    // Assuming the frontend sends 'approved' or 'rejected' in reqOk
-    const { reqOk, reqReciever } = req.body; 
+    const { reqOk, reqReciever } = req.body;
     console.log(`Request received to update request ${reqId} status to ${reqOk} for receiver ${reqReciever}`);
 
-    if (!reqId || !reqOk || !reqReciever) {
-        return res.status(400).json({ success: false, error: 'Missing required parameters: reqId, reqOk (approved/rejected), reqReciever.' });
+    if (!reqId || !reqOk || !reqReciever || (reqOk !== 'approved' && reqOk !== 'rejected')) {
+        return res.status(400).json({ success: false, error: 'Missing or invalid parameters: reqId, reqOk (approved/rejected), reqReciever.' });
     }
 
-    if (reqOk !== 'approved' && reqOk !== 'rejected') {
-         return res.status(400).json({ success: false, error: 'Invalid value for reqOk. Must be "approved" or "rejected".' });
-    }
-
+    let connection;
     try {
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
+
         const query = `UPDATE xicorana.request SET reqOk = ? WHERE reqId = ? AND reqReciever = ? AND reqOk = 'pending';`;
-        const [result] = await pool.query(query, [reqOk, reqId, reqReciever]);
+        const [result] = await connection.query(query, [reqOk, reqId, reqReciever]);
 
         if (result.affectedRows === 0) {
-            // Check if request exists and its status
+            await connection.rollback(); // Rollback before checking
             const [checkResult] = await pool.query('SELECT reqOk FROM xicorana.request WHERE reqId = ? AND reqReciever = ?', [reqId, reqReciever]);
-            if (checkResult.length > 0 && checkResult[0].reqOk !== 'pending'){
+            if (checkResult.length > 0 && checkResult[0].reqOk !== 'pending') {
                 return res.status(409).json({ success: false, error: 'تغییری انجام نپذیرفت، وضعیت درخواست از قبل تعیین شده است' });
             } else if (checkResult.length === 0) {
-                 return res.status(404).json({ success: false, error: 'درخواست با این شناسه برای این کاربر یافت نشد' });
+                return res.status(404).json({ success: false, error: 'درخواست با این شناسه برای این کاربر یافت نشد' });
             }
-            // Generic error
             return res.status(404).json({ success: false, error: 'تغییری انجام نپذیرفت، وضعیت درخواست از قبل تعیین شده و یا ارتباط شما با سرور دچار مشکل شده است' });
         }
 
+        await connection.commit(); // Commit the change
         let reqOkPersian = reqOk === "approved" ? "تایید شده" : "رد شده";
         res.status(200).json({ success: true, data: `وضعیت درخواست به ${reqOkPersian} تغییر کرد` });
 
     } catch (error) {
+        if (connection) await connection.rollback();
         console.error(`Database error updating status for request ${reqId}:`, error);
         res.status(500).json({ success: false, error: `خطای پایگاه داده: ${String(error.message)}` });
+    } finally {
+        if (connection) connection.release();
     }
 };
 
@@ -104,21 +106,29 @@ const createRequest = async (req, res) => {
         return res.status(400).json({ success: false, error: 'Missing required body parameters: reqType, reqDetail, userId, reqReciever.' });
     }
 
+    let connection;
+    const newReqId = `req${Math.floor(Math.random() * 1000000)}`; // Generate random ID outside transaction
+
     try {
-        const newReqId = `req${Math.floor(Math.random() * 1000000)}`; // Generate random ID
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
+
         const query = `
             INSERT INTO xicorana.request (reqId, reqDate, reqType, reqDetail, reqSender, reqReciever, reqOk)
             VALUES (?, NOW(), ?, ?, ?, ?, 'pending');
         `;
-        const [result] = await pool.query(query, [newReqId, reqType, reqDetail, userId, reqReciever]);
+        const [result] = await connection.query(query, [newReqId, reqType, reqDetail, userId, reqReciever]);
 
         if (result.affectedRows === 0) {
-            // This should ideally not happen if the query is correct and connection is stable
-            console.error('Failed to insert new request.', req.body);
+            await connection.rollback();
+            console.error('Failed to insert new request (affectedRows=0).', req.body);
             return res.status(500).json({ success: false, error: 'مشکلی در ایجاد درخواست پیش آمد، لطفا دوباره تلاش کنید' });
         }
+        
+        await connection.commit(); // Commit the insertion
+        console.log(`Successfully created request ${newReqId}`);
 
-        // Send SMS notification (Consider moving to background job)
+        // Send SMS notification (outside transaction)
         try {
             const [userInfo] = await pool.query('SELECT phoneNumber FROM xicorana.user WHERE userId = ?', [reqReciever]);
             if (userInfo.length > 0 && userInfo[0].phoneNumber) {
@@ -146,12 +156,14 @@ const createRequest = async (req, res) => {
         }
 
     } catch (error) {
+        if (connection) await connection.rollback();
         console.error('Database error creating new request:', error);
-        // Check for specific errors e.g., duplicate reqId if not truly random
         if (error.code === 'ER_DUP_ENTRY') {
             return res.status(409).json({ success: false, error: 'خطای سیستمی: شناسه درخواست تکراری ایجاد شد. لطفا دوباره تلاش کنید.' });
         }
         res.status(500).json({ success: false, error: `خطای پایگاه داده: ${String(error.message)}` });
+    } finally {
+        if (connection) connection.release();
     }
 };
 
@@ -205,104 +217,122 @@ const adminGetReceivedPendingRequests = async (req, res) => {
 // Admin: Delete a Sent Request
 const adminDeleteSentRequest = async (req, res) => {
     const reqId = req.params.reqId;
-     // We might need userId from token/query to ensure user can only delete their own requests?
-     // const senderUserId = req.user.userId; // Assuming userId is in token
     console.log(`Admin request to delete sent request ${reqId}`);
 
     if (!reqId) {
         return res.status(400).json({ success: false, error: 'Request ID (reqId) parameter is required.' });
     }
 
+    let connection;
     try {
-         // Add sender condition if needed: AND reqSender = ?
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
+
         const query = `DELETE FROM xicorana.request WHERE reqId = ?;`;
-        const [result] = await pool.query(query, [reqId]);
+        const [result] = await connection.query(query, [reqId]);
 
         if (result.affectedRows === 0) {
+            await connection.rollback(); // Nothing deleted, rollback (though likely unnecessary)
             return res.status(404).json({ success: false, error: 'درخواست ارسالی یافت نشد یا از پیش حذف شده است' });
         }
+
+        await connection.commit(); // Commit deletion
         res.status(200).json({ success: true, data: 'درخواست ارسالی حذف شد' });
+
     } catch (error) {
+        if (connection) await connection.rollback();
         console.error(`Database error deleting sent request ${reqId}:`, error);
         res.status(500).json({ success: false, error: `خطای پایگاه داده: ${String(error.message)}` });
+    } finally {
+        if (connection) connection.release();
     }
 };
 
 // Admin: Approve a Received Request
 const adminApproveReceivedRequest = async (req, res) => {
     const reqId = req.params.reqId;
-    // We might need userId from token/query to ensure user can only approve requests sent TO them?
-    // const receiverUserId = req.user.userId; // Assuming userId is in token
     console.log(`Admin request to approve received request ${reqId}`);
 
     if (!reqId) {
         return res.status(400).json({ success: false, error: 'Request ID (reqId) parameter is required.' });
     }
 
+    let connection;
     try {
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
         // Setting reqOk to '1' as per original code
-        // Add receiver condition if needed: AND reqReciever = ?
-        const query = `UPDATE xicorana.request SET reqOk = '1' WHERE reqId = ? AND reqOk = 'pending';`; 
-        const [result] = await pool.query(query, [reqId]);
+        const query = `UPDATE xicorana.request SET reqOk = '1' WHERE reqId = ? AND reqOk = 'pending';`;
+        const [result] = await connection.query(query, [reqId]);
 
         if (result.affectedRows === 0) {
-             // Check if request exists and its status
+            await connection.rollback(); // Rollback before checking
             const [checkResult] = await pool.query('SELECT reqOk FROM xicorana.request WHERE reqId = ?', [reqId]);
-            if (checkResult.length > 0 && checkResult[0].reqOk !== 'pending'){
+            if (checkResult.length > 0 && checkResult[0].reqOk !== 'pending') {
                 return res.status(409).json({ success: false, error: 'درخواست از پیش پردازش شده است (تایید یا رد شده)' });
             } else if (checkResult.length === 0) {
-                 return res.status(404).json({ success: false, error: 'درخواست با این شناسه یافت نشد' });
+                return res.status(404).json({ success: false, error: 'درخواست با این شناسه یافت نشد' });
             }
-            // Generic fallback
             return res.status(404).json({ success: false, error: "درخواست یافت نشد یا وضعیت آن 'pending' نیست" });
         }
+
+        await connection.commit(); // Commit approval
         res.status(200).json({ success: true, data: 'درخواست با موفقیت تایید شد' });
+
     } catch (error) {
+        if (connection) await connection.rollback();
         console.error(`Database error approving request ${reqId}:`, error);
         res.status(500).json({ success: false, error: `خطای پایگاه داده: ${String(error.message)}` });
+    } finally {
+        if (connection) connection.release();
     }
 };
 
 // Admin: Deny a Received Request
 const adminDenyReceivedRequest = async (req, res) => {
     const reqId = req.params.reqId;
-    // Add receiverUserId check if needed
     console.log(`Admin request to deny received request ${reqId}`);
 
     if (!reqId) {
         return res.status(400).json({ success: false, error: 'Request ID (reqId) parameter is required.' });
     }
 
+    let connection;
     try {
-         // Setting reqOk to '0' as per original code
-        const query = `UPDATE xicorana.request SET reqOk = '0' WHERE reqId = ? AND reqOk = 'pending';`; 
-        const [result] = await pool.query(query, [reqId]);
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
+        // Setting reqOk to '0' as per original code
+        const query = `UPDATE xicorana.request SET reqOk = '0' WHERE reqId = ? AND reqOk = 'pending';`;
+        const [result] = await connection.query(query, [reqId]);
 
         if (result.affectedRows === 0) {
-             // Check if request exists and its status
+            await connection.rollback(); // Rollback before checking
             const [checkResult] = await pool.query('SELECT reqOk FROM xicorana.request WHERE reqId = ?', [reqId]);
-            if (checkResult.length > 0 && checkResult[0].reqOk !== 'pending'){
+            if (checkResult.length > 0 && checkResult[0].reqOk !== 'pending') {
                 return res.status(409).json({ success: false, error: 'درخواست از پیش پردازش شده است (تایید یا رد شده)' });
             } else if (checkResult.length === 0) {
-                 return res.status(404).json({ success: false, error: 'درخواست با این شناسه یافت نشد' });
+                return res.status(404).json({ success: false, error: 'درخواست با این شناسه یافت نشد' });
             }
-             // Generic fallback
             return res.status(404).json({ success: false, error: "درخواست یافت نشد یا وضعیت آن 'pending' نیست" });
         }
+
+        await connection.commit(); // Commit denial
         res.status(200).json({ success: true, data: 'درخواست با موفقیت رد شد' });
+
     } catch (error) {
+        if (connection) await connection.rollback();
         console.error(`Database error denying request ${reqId}:`, error);
         res.status(500).json({ success: false, error: `خطای پایگاه داده: ${String(error.message)}` });
+    } finally {
+        if (connection) connection.release();
     }
 };
-
 
 module.exports = {
     getPendingRequests,
     updateRequestStatus,
     getSentPendingRequests,
     createRequest,
-    // Admin
     adminGetSentRequests,
     adminGetReceivedPendingRequests,
     adminDeleteSentRequest,

@@ -68,11 +68,16 @@ const setOrderSecurityChecked = async (req, res) => {
         return res.status(400).json({ success: false, error: 'Order ID parameter is required.' });
     }
 
+    let connection;
     try {
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
+
         const query = `UPDATE xicorana.order SET orderSituation = 'Security Checked' WHERE ordId = ? AND orderSituation != 'Security Checked';`;
-        const [result] = await pool.query(query, [orderId]);
+        const [result] = await connection.query(query, [orderId]);
 
         if (result.affectedRows === 0) {
+            await connection.rollback(); // Rollback before checking status
             // Could be already checked, or order doesn't exist
             // Check if the order exists and is already checked to provide a more specific message
             const [checkResult] = await pool.query('SELECT orderSituation FROM xicorana.order WHERE ordId = ?', [orderId]);
@@ -85,11 +90,15 @@ const setOrderSecurityChecked = async (req, res) => {
             return res.status(404).json({ success: false, error: 'تغییری انجام نپذیرفت، ممکن است وضعیت سفارش از قبل تعیین شده باشد یا سفارش موجود نباشد' });
         }
 
+        await connection.commit(); // Commit the successful update
         res.status(200).json({ success: true, data: `وضغیت سفارش ${orderId} به <<تایید حراست>> تغییر کرد` });
 
     } catch (error) {
+        if (connection) await connection.rollback(); // Rollback on error
         console.error(`Database error setting order ${orderId} to Security Checked:`, error);
         res.status(500).json({ success: false, error: `خطای پایگاه داده: ${String(error.message)}` });
+    } finally {
+        if (connection) connection.release(); // Always release connection
     }
 };
 

@@ -1,300 +1,278 @@
 const pool = require('../config/db');
 const axios = require('axios');
 
-// Helper function to send SMS (avoids repetition)
-const sendSms = (phoneNumber, smsText) => {
-    if (!phoneNumber || !smsText) return;
+// Helper to check QC status (avoids code duplication)
+const checkQC = async (uid) => {
+    const itemType = uid.substring(0, 3);
+    let qcQuery = '';
+    let fieldToCheck = '';
+
+    switch (itemType) {
+        case 'wsp': qcQuery = 'SELECT wspQC FROM xicorana.wirespool WHERE wspId = ?'; fieldToCheck = 'wspQC'; break;
+        case 'ins': qcQuery = 'SELECT insQC FROM xicorana.insul WHERE insId = ?'; fieldToCheck = 'insQC'; break;
+        case 'car': qcQuery = 'SELECT cartQC FROM xicorana.cart WHERE cartId = ?'; fieldToCheck = 'cartQC'; break;
+        case 'fip': return { qcPassed: true }; // Final product assumed QC passed or not applicable
+        default: return { error: 'Invalid uid prefix' };
+    }
+
     try {
-        const axiosFullreq = `https://api.sms-webservice.com/api/V3/Send?ApiKey=@@&SecretKey=@@&Text=${encodeURIComponent(smsText)}&Sender=@number@&Recipients=${phoneNumber}`;
-        console.log("Attempting to send SMS to:", phoneNumber);
-        axios.get(axiosFullreq)
-            .then(response => console.log("SMS API Response:", response.status))
-            .catch(error => console.error('SMS sending failed:', error.response ? error.response.data : error.message));
-    } catch (err) {
-         console.error('Error constructing or sending SMS request:', err);
+        const [results] = await pool.query(qcQuery, [uid]);
+        if (results.length === 0) {
+            return { error: 'Item not found for QC check' };
+        }
+        return { qcPassed: results[0][fieldToCheck] == 1 }; // Check if QC is 1
+    } catch (dbError) {
+        console.error(`Database error during QC check for ${uid}:`, dbError);
+        return { error: `Database error during QC check: ${dbError.message}` };
     }
 };
 
-// Controller for handling item entry
+// Helper to send SMS (avoids code duplication)
+const sendSMS = (phoneNumber, text) => {
+    if (!phoneNumber) {
+        console.warn("SMS not sent: Phone number missing.");
+        return;
+    }
+    const apiKey = process.env.SMS_API_KEY || '@@';
+    const secretKey = process.env.SMS_SECRET_KEY || '@@';
+    const sender = process.env.SMS_SENDER || '@number@';
+    const axiosFullreq = `https://api.sms-webservice.com/api/V3/Send?ApiKey=${apiKey}&SecretKey=${secretKey}&Text=${encodeURIComponent(text)}&Sender=${sender}&Recipients=${phoneNumber}`;
+
+    console.log("Attempting to send SMS to:", phoneNumber);
+    axios.get(axiosFullreq)
+        .then(response => console.log('SMS API Response:', response.status, response.data))
+        .catch(error => console.error('SMS API Error:', error.response ? error.response.data : error.message));
+};
+
+// Handle Item Entry
 const handleEntry = async (req, res) => {
     const { wpId } = req.body;
     const uid = req.params.uid;
-    console.log(`Handling entry for uid: ${uid} into wpId: ${wpId}`);
+    console.log(`Request received for ENTRY: UID=${uid}, WP=${wpId}`);
 
     if (!wpId || !uid) {
-        return res.status(400).json({ success: false, error: 'wpId and uid are required.' });
+        return res.status(400).json({ success: false, error: 'Missing wpId or uid parameters.' });
     }
 
     const itemType = uid.substring(0, 3);
-    let qcQuery = '';
-    let qcField = '';
-    let updateQuery = '';
-    let tableName = '';
+    let queryToRun = '';
     let idField = '';
-    let llField = '';
+    let statusField = '';
+    let tableName = '';
 
-    // Define queries and fields based on item type
     switch (itemType) {
-        case 'wsp':
-            tableName = 'wirespool'; idField = 'wspId'; llField = 'wspLL'; qcField = 'wspQC';
-            qcQuery = `SELECT ${qcField} FROM xicorana.${tableName} WHERE ${idField} = ?`;
-            updateQuery = `UPDATE xicorana.${tableName} SET wpId = ?, ${llField} = 'ورود' WHERE ${idField} = ? AND wpId != ? AND ${llField} != 'ورود';`;
-            break;
-        case 'ins':
-             tableName = 'insul'; idField = 'insId'; llField = 'insLL'; qcField = 'insQC';
-             qcQuery = `SELECT ${qcField} FROM xicorana.${tableName} WHERE ${idField} = ?`;
-             updateQuery = `UPDATE xicorana.${tableName} SET wpId = ?, ${llField} = 'ورود' WHERE ${idField} = ? AND wpId != ? AND ${llField} != 'ورود';`;
-            break;
-        case 'car':
-            tableName = 'cart'; idField = 'cartId'; llField = 'cartLL'; qcField = 'cartQC';
-            qcQuery = `SELECT ${qcField} FROM xicorana.${tableName} WHERE ${idField} = ?`;
-            updateQuery = `UPDATE xicorana.${tableName} SET wpId = ?, ${llField} = 'ورود' WHERE ${idField} = ? AND wpId != ? AND ${llField} != 'ورود';`;
-            break;
-        case 'fip':
-            tableName = 'finalproduct'; idField = 'fpId'; llField = 'fpLL';
-            qcQuery = null; // No QC check for final product entry
-            updateQuery = `UPDATE xicorana.${tableName} SET wpId = ?, ${llField} = 'ورود' WHERE ${idField} = ? AND wpId != ? AND ${llField} != 'ورود';`;
-            break;
+        case 'wsp': tableName = 'wirespool'; idField = 'wspId'; statusField = 'wspLL'; queryToRun = `UPDATE xicorana.${tableName} SET wpId = ?, ${statusField} = 'ورود' WHERE ${idField} = ? AND wpId != ? AND ${statusField} != 'ورود';`; break;
+        case 'ins': tableName = 'insul'; idField = 'insId'; statusField = 'insLL'; queryToRun = `UPDATE xicorana.${tableName} SET wpId = ?, ${statusField} = 'ورود' WHERE ${idField} = ? AND wpId != ? AND ${statusField} != 'ورود';`; break;
+        case 'car': tableName = 'cart'; idField = 'cartId'; statusField = 'cartLL'; queryToRun = `UPDATE xicorana.${tableName} SET wpId = ?, ${statusField} = 'ورود' WHERE ${idField} = ? AND wpId != ? AND ${statusField} != 'ورود';`; break;
+        case 'fip': tableName = 'finalproduct'; idField = 'fpId'; statusField = 'fpLL'; queryToRun = `UPDATE xicorana.${tableName} SET wpId = ?, ${statusField} = 'ورود' WHERE ${idField} = ? AND wpId != ? AND ${statusField} != 'ورود';`; break;
         default:
             return res.status(400).json({ success: false, error: 'Invalid uid prefix' });
     }
 
-    let connection;
-    try {
-        connection = await pool.getConnection();
-        await connection.beginTransaction();
-
-        let aghayeQC = 0; // Default QC status (0 = Not OK or N/A)
-        
-        // 1. Check QC status if applicable
-        if (qcQuery) {
-            const [qcResults] = await connection.query(qcQuery, [uid]);
-            if (qcResults.length > 0 && qcResults[0][qcField] == 1) {
-                aghayeQC = 1; // QC is OK
-            }
-             console.log(`QC check for ${uid}: Status = ${aghayeQC}`);
-        }
-
-        // 2. Update item location and status
-        console.log('Executing update query:', updateQuery);
-        const [updateResult] = await connection.query(updateQuery, [wpId, uid, wpId]);
-
-        if (updateResult.affectedRows === 0) {
-             await connection.rollback();
-             return res.status(404).json({ success: false, error: `محصولی برای ورود ثبت نشد. وضعیت کنترل کیفیت، مکان فعلی، یا تکراری بودن عملیات را بررسی کنید.` });
-        }
-        
-        // 3. Get workplace details for SMS (don't fail transaction if this lookup fails)
-        let wpName = 'نامشخص';
-        let phoneNumber = null;
-        try {
-            const [wpResults] = await connection.query('SELECT wpName, wpPhoneNumber FROM xicorana.workplace WHERE wpId = ?', [wpId]);
-            if (wpResults.length > 0) {
-                wpName = wpResults[0].wpName;
-                phoneNumber = wpResults[0].wpPhoneNumber;
-            }
-        } catch (wpError) {
-            console.error('Error fetching workplace details for SMS:', wpError);
-            // Continue without SMS details
-        }
-
-        // 4. Commit the transaction
-        await connection.commit();
-        console.log(`Entry transaction successful for uid: ${uid}`);
-
-        // 5. Send SMS (after successful commit)
-        if (phoneNumber) {
-            const smsText = `ورود کالای ${uid} به انبار ${wpName} صورت گرفت\nسامانه ردیابی افشان نگار آریا`;
-            sendSms(phoneNumber, smsText);
-        }
-
-        // 6. Send response
-        let response = { success: true, data: 'محصول وارد شد' };
-        if (phoneNumber === null) {
-             response.warning = 'ارسال پیامک به سرپرست انبار با مشکل مواجه شد (عدم یافتن اطلاعات انبار).';
-        }
-        if (aghayeQC === 0 && itemType !== 'fip') { // Add QC alert if applicable and QC wasn't OK
-            response.alert = 'محصول مورد نظر دارایی تاییدیه کنترل کیفی نیست!';
-            response.success = 'alert'; // Keep success as 'alert' to match original logic
-        }
-        res.status(200).json(response);
-
-    } catch (error) {
-        console.error(`Error during entry transaction for uid: ${uid}:`, error);
-        if (connection) await connection.rollback(); // Rollback on any error
-        res.status(500).json({ success: false, error: `خطای داخلی سرور: ${String(error.message)}` });
-    } finally {
-        if (connection) connection.release(); // Always release connection
-    }
-};
-
-// Controller for handling item exit
-const handleExit = async (req, res) => {
-    const { wpId } = req.body;
-    const uid = req.params.uid;
-     console.log(`Handling exit for uid: ${uid} from wpId: ${wpId}`);
-
-     if (!wpId || !uid) {
-        return res.status(400).json({ success: false, error: 'wpId and uid are required.' });
-    }
-
-    const itemType = uid.substring(0, 3);
-    let qcQuery = '';
-    let qcField = '';
-    let updateQuery = '';
-    let tableName = '';
-    let idField = '';
-    let llField = '';
-
-     // Define queries and fields based on item type
-    switch (itemType) {
-        case 'wsp':
-            tableName = 'wirespool'; idField = 'wspId'; llField = 'wspLL'; qcField = 'wspQC';
-            qcQuery = `SELECT ${qcField} FROM xicorana.${tableName} WHERE ${idField} = ?`;
-            updateQuery = `UPDATE xicorana.${tableName} SET ${llField}='خروج' WHERE ${idField} = ? AND wpId = ? AND ${llField} != 'خروج';`;
-            break;
-        case 'ins':
-             tableName = 'insul'; idField = 'insId'; llField = 'insLL'; qcField = 'insQC';
-             qcQuery = `SELECT ${qcField} FROM xicorana.${tableName} WHERE ${idField} = ?`;
-             updateQuery = `UPDATE xicorana.${tableName} SET ${llField}='خروج' WHERE ${idField} = ? AND wpId = ? AND ${llField} != 'خروج';`;
-            break;
-        case 'car':
-            tableName = 'cart'; idField = 'cartId'; llField = 'cartLL'; qcField = 'cartQC';
-            qcQuery = `SELECT ${qcField} FROM xicorana.${tableName} WHERE ${idField} = ?`;
-             updateQuery = `UPDATE xicorana.${tableName} SET ${llField}='خروج' WHERE ${idField} = ? AND wpId = ? AND ${llField} != 'خروج';`;
-            break;
-        case 'fip':
-            tableName = 'finalproduct'; idField = 'fpId'; llField = 'fpLL';
-            qcQuery = null; // No QC check for final product exit
-            updateQuery = `UPDATE xicorana.${tableName} SET ${llField} = 'خروج' WHERE ${idField} = ? AND wpId = ? AND ${llField} != 'خروج';`;
-            break;
-        default:
-            return res.status(400).json({ success: false, error: 'Invalid uid prefix' });
+    // 1. Check QC status first
+    const qcResult = await checkQC(uid);
+    if (qcResult.error) {
+        // Handle QC check error (e.g., item not found, DB error)
+        const status = qcResult.error.includes('not found') ? 404 : 500;
+        return res.status(status).json({ success: false, error: qcResult.error });
     }
 
     let connection;
     try {
+        // 2. Perform the update within a transaction
         connection = await pool.getConnection();
         await connection.beginTransaction();
 
-        let aghayeQC = 0; // Default QC status
-        
-         // 1. Check QC status if applicable
-        if (qcQuery) {
-            const [qcResults] = await connection.query(qcQuery, [uid]);
-            if (qcResults.length > 0 && qcResults[0][qcField] == 1) {
-                aghayeQC = 1; // QC is OK
-            }
-             console.log(`QC check for ${uid}: Status = ${aghayeQC}`);
-        }
-
-        // 2. Update item status to 'خروج'
-        console.log('Executing update query:', updateQuery);
-        const [updateResult] = await connection.query(updateQuery, [uid, wpId]);
+        console.log('Executing entry update query:', queryToRun);
+        const [updateResult] = await connection.query(queryToRun, [wpId, uid, wpId]);
 
         if (updateResult.affectedRows === 0) {
-             await connection.rollback();
-             // Provide a more informative error message
-             return res.status(404).json({ success: false, error: `محصولی برای خروج ثبت نشد. محصول در این انبار نیست یا قبلاً خارج شده است.` });
+            await connection.rollback();
+            return res.status(404).json({ success: false, error: `محصولی برای ورود ثبت نشد. از وضعیت کنترل کیفیت و یا مکان فعلی محصول (${statusField} باید مخالف 'ورود' و wpId مخالف ${wpId} باشد) اطمینان حاصل کنید.` });
         }
         
-         // 3. Get workplace details for SMS (don't fail transaction if this lookup fails)
-        let wpName = 'نامشخص';
-        let phoneNumber = null;
-        try {
-            const [wpResults] = await connection.query('SELECT wpName, wpPhoneNumber FROM xicorana.workplace WHERE wpId = ?', [wpId]);
-            if (wpResults.length > 0) {
-                wpName = wpResults[0].wpName;
-                phoneNumber = wpResults[0].wpPhoneNumber;
-            }
-        } catch (wpError) {
-            console.error('Error fetching workplace details for SMS:', wpError);
-             // Continue without SMS details
-        }
-
-        // 4. Commit the transaction
         await connection.commit();
-         console.log(`Exit transaction successful for uid: ${uid}`);
+        console.log(`Entry successful for UID ${uid} to WP ${wpId}`);
 
-         // 5. Send SMS (after successful commit)
-        if (phoneNumber) {
-             const smsText = `خروج کالای ${uid} از انبار ${wpName} صورت گرفت\nسامانه ردیابی افشان نگار آریا`; // Corrected typo in original
-            sendSms(phoneNumber, smsText);
+        // 3. Send SMS (outside transaction, after successful commit)
+        try {
+            const [wpInfo] = await pool.query('SELECT wpName, wpPhoneNumber FROM xicorana.workplace WHERE wpId = ?', [wpId]);
+            if (wpInfo.length > 0) {
+                const smsText = `ورود کالای ${uid} به انبار ${wpInfo[0].wpName} صورت گرفت\nسامانه ردیابی افشان نگار آریا`;
+                sendSMS(wpInfo[0].wpPhoneNumber, smsText);
+            } else {
+                console.warn(`Workplace info not found for ${wpId}, cannot send entry SMS.`);
+            }
+        } catch (smsRelatedError) {
+            console.error(`Error fetching workplace info or sending SMS for entry ${uid}:`, smsRelatedError);
+             // Log the error but don't fail the main response as the entry was successful
         }
 
-        // 6. Send response
-        let response = { success: true, data: 'محصول خارج شد' };
-         if (phoneNumber === null) {
-             response.warning = 'ارسال پیامک به سرپرست انبار با مشکل مواجه شد (عدم یافتن اطلاعات انبار).';
+        // 4. Send Response (include QC alert if needed)
+        const responseData = { success: true, data: `محصول وارد شد` };
+        if (!qcResult.qcPassed) {
+            responseData.success = 'alert'; // Use 'alert' status as per original code
+            responseData.alert = 'محصول مورد نظر دارایی تاییدیه کنترل کیفی نیست!';
         }
-         if (aghayeQC === 0 && itemType !== 'fip') { // Add QC alert if applicable
-            response.alert = 'محصول مورد نظر دارایی تاییدیه کنترل کیفی نیست!';
-            response.success = 'alert'; // Keep success as 'alert' to match original logic
-        }
-        res.status(200).json(response);
+        res.status(200).json(responseData);
 
     } catch (error) {
-        console.error(`Error during exit transaction for uid: ${uid}:`, error);
         if (connection) await connection.rollback();
-        res.status(500).json({ success: false, error: `خطای داخلی سرور: ${String(error.message)}` });
+        console.error(`Error handling entry for UID ${uid}:`, error);
+        res.status(500).json({ success: false, error: `خطای پایگاه داده در هنگام ثبت ورود: ${String(error.message)}` });
     } finally {
         if (connection) connection.release();
     }
 };
 
-// Controller for handling item placement
-const handlePlacement = async (req, res) => {
-    const { sectorNew, wpId } = req.body;
+// Handle Item Exit
+const handleExit = async (req, res) => {
+    const { wpId } = req.body;
     const uid = req.params.uid;
-     console.log(`Handling placement for uid: ${uid} to sector: ${sectorNew} in wpId: ${wpId}`);
+    console.log(`Request received for EXIT: UID=${uid}, WP=${wpId}`);
 
-    if (!sectorNew || !wpId || !uid) {
-        return res.status(400).json({ success: false, error: 'sectorNew, wpId, and uid are required.' });
+     if (!wpId || !uid) {
+        return res.status(400).json({ success: false, error: 'Missing wpId or uid parameters.' });
     }
 
     const itemType = uid.substring(0, 3);
-    let updateQuery = '';
+    let queryToRun = '';
+    let idField = '';
+    let statusField = '';
     let tableName = '';
+
+     switch (itemType) {
+        case 'wsp': tableName = 'wirespool'; idField = 'wspId'; statusField = 'wspLL'; queryToRun = `UPDATE xicorana.${tableName} SET ${statusField} = 'خروج' WHERE ${idField} = ? AND wpId = ? AND ${statusField} != 'خروج';`; break;
+        case 'ins': tableName = 'insul'; idField = 'insId'; statusField = 'insLL'; queryToRun = `UPDATE xicorana.${tableName} SET ${statusField} = 'خروج' WHERE ${idField} = ? AND wpId = ? AND ${statusField} != 'خروج';`; break;
+        case 'car': tableName = 'cart'; idField = 'cartId'; statusField = 'cartLL'; queryToRun = `UPDATE xicorana.${tableName} SET ${statusField} = 'خروج' WHERE ${idField} = ? AND wpId = ? AND ${statusField} != 'خروج';`; break;
+        case 'fip': tableName = 'finalproduct'; idField = 'fpId'; statusField = 'fpLL'; queryToRun = `UPDATE xicorana.${tableName} SET ${statusField} = 'خروج' WHERE ${idField} = ? AND wpId = ? AND ${statusField} != 'خروج';`; break;
+        default:
+            return res.status(400).json({ success: false, error: 'Invalid uid prefix' });
+    }
+
+    // 1. Check QC status first
+    const qcResult = await checkQC(uid);
+     if (qcResult.error) {
+        // Handle QC check error
+        const status = qcResult.error.includes('not found') ? 404 : 500;
+        return res.status(status).json({ success: false, error: qcResult.error });
+    }
+
+    let connection;
+    try {
+        // 2. Perform the update within a transaction
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
+
+        console.log('Executing exit update query:', queryToRun);
+        const [updateResult] = await connection.query(queryToRun, [uid, wpId]);
+
+        if (updateResult.affectedRows === 0) {
+            await connection.rollback();
+             // Check if the item exists at the workplace but is already 'خروج'
+             const checkQuery = `SELECT ${statusField} FROM xicorana.${tableName} WHERE ${idField} = ? AND wpId = ?`;
+             const [checkStatus] = await connection.query(checkQuery, [uid, wpId]);
+             if (checkStatus.length > 0 && checkStatus[0][statusField] === 'خروج') {
+                 return res.status(409).json({ success: false, error: 'محصول از قبل خارج شده است.' }); // 409 Conflict
+             } else if (checkStatus.length === 0) {
+                  return res.status(404).json({ success: false, error: 'محصول در این مکان یافت نشد.' });
+             }
+            // Fallback error
+            return res.status(404).json({ success: false, error: `محصولی برای خروج ثبت نشد. از وضعیت مکان و وضعیت خروج (${statusField} باید مخالف 'خروج' باشد) اطمینان حاصل کنید.` });
+        }
+
+        await connection.commit();
+         console.log(`Exit successful for UID ${uid} from WP ${wpId}`);
+
+        // 3. Send SMS (outside transaction, after successful commit)
+         try {
+            const [wpInfo] = await pool.query('SELECT wpName, wpPhoneNumber FROM xicorana.workplace WHERE wpId = ?', [wpId]);
+            if (wpInfo.length > 0) {
+                const smsText = `خروج کالای ${uid} از انبار ${wpInfo[0].wpName} صورت گرفت\nسامانه ردیابی افشان نگار آریا`;
+                sendSMS(wpInfo[0].wpPhoneNumber, smsText);
+            } else {
+                 console.warn(`Workplace info not found for ${wpId}, cannot send exit SMS.`);
+            }
+        } catch (smsRelatedError) {
+            console.error(`Error fetching workplace info or sending SMS for exit ${uid}:`, smsRelatedError);
+        }
+
+        // 4. Send Response (include QC alert if needed)
+        const responseData = { success: true, data: `محصول خارج شد` };
+        if (!qcResult.qcPassed) {
+            responseData.success = 'alert'; // Use 'alert' status as per original code
+            responseData.alert = 'محصول مورد نظر دارایی تاییدیه کنترل کیفی نیست!';
+        }
+        res.status(200).json(responseData);
+
+    } catch (error) {
+        if (connection) await connection.rollback();
+        console.error(`Error handling exit for UID ${uid}:`, error);
+        res.status(500).json({ success: false, error: `خطای پایگاه داده در هنگام ثبت خروج: ${String(error.message)}` });
+    } finally {
+        if (connection) connection.release();
+    }
+};
+
+// Handle Item Placement (Sector Change)
+const handlePlacement = async (req, res) => {
+    const { sectorNew, wpId } = req.body;
+    const uid = req.params.uid;
+    console.log(`Request received for PLACEMENT: UID=${uid}, NewSector=${sectorNew}, WP=${wpId}`);
+
+     if (!sectorNew || !wpId || !uid) {
+        return res.status(400).json({ success: false, error: 'Missing sectorNew, wpId, or uid parameters.' });
+    }
+
+    const itemType = uid.substring(0, 3);
+    let queryToRun = '';
     let idField = '';
     let sectorField = '';
+    let tableName = '';
 
-    // Define queries and fields based on item type
     switch (itemType) {
-        case 'wsp':
-            tableName = 'wirespool'; idField = 'wspId'; sectorField = 'wspSector';
-            updateQuery = `UPDATE xicorana.${tableName} SET ${sectorField} = ? WHERE ${idField} = ? AND ${sectorField} != ? AND wpId = ?;`;
-            break;
-        case 'ins':
-             tableName = 'insul'; idField = 'insId'; sectorField = 'insSector';
-             // Note: Original query had table name 'insul', corrected here
-             updateQuery = `UPDATE xicorana.${tableName} SET ${sectorField} = ? WHERE ${idField} = ? AND ${sectorField} != ? AND wpId = ?;`; 
-            break;
-        case 'fip': // Assuming final products can also be placed
-             tableName = 'finalproduct'; idField = 'fpId'; sectorField = 'fpSector';
-             updateQuery = `UPDATE xicorana.${tableName} SET ${sectorField} = ? WHERE ${idField} = ? AND ${sectorField} != ? AND wpId = ?;`;
-            break;
-         // case 'car': // Carts don't have a sector field in the original code
+        case 'wsp': tableName = 'wirespool'; idField = 'wspId'; sectorField = 'wspSector'; queryToRun = `UPDATE xicorana.${tableName} SET ${sectorField} = ? WHERE ${idField} = ? AND ${sectorField} != ? AND wpId = ?;`; break;
+        // Original code had typo 'insul' instead of 'xicorana.insul'?
+        case 'ins': tableName = 'insul'; idField = 'insId'; sectorField = 'insSector'; queryToRun = `UPDATE xicorana.${tableName} SET ${sectorField} = ? WHERE ${idField} = ? AND ${sectorField} != ? AND wpId = ?;`; break;
+        // Original code had typo 'finalproduct ' instead of 'xicorana.finalproduct'?
+        case 'fip': tableName = 'finalproduct'; idField = 'fpId'; sectorField = 'fpSector'; queryToRun = `UPDATE xicorana.${tableName} SET ${sectorField} = ? WHERE ${idField} = ? AND ${sectorField} != ? AND wpId = ?;`; break;
         default:
-             // If 'car' or other types shouldn't be placeable, handle here or return error
-            return res.status(400).json({ success: false, error: 'Invalid or non-placeable uid prefix' });
+            return res.status(400).json({ success: false, error: 'Invalid uid prefix' });
     }
 
+    let connection;
     try {
-        console.log('Executing placement query:', updateQuery);
-        const [result] = await pool.query(updateQuery, [sectorNew, uid, sectorNew, wpId]);
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
 
-        if (result.affectedRows === 0) {
-            // Changed status to 400 as it might be a client error (wrong wpId, already in sector)
-            return res.status(400).json({ success: false, error: `محصول به سکتور منتقل نشد. از تطابق انبار و عدم وجود کالا در سکتور مقصد اطمینان حاصل فرمایید.` });
-        } else {
-            console.log(`Placement successful for uid: ${uid}`);
-            res.status(200).json({ success: true, data: `محصول به سکتور ${sectorNew} منتقل شد` });
+        console.log('Executing placement update query:', queryToRun);
+        const [updateResult] = await connection.query(queryToRun, [sectorNew, uid, sectorNew, wpId]);
+
+        if (updateResult.affectedRows === 0) {
+            await connection.rollback();
+             // Check if item exists at the workplace but already has the target sector
+             const checkQuery = `SELECT ${sectorField} FROM xicorana.${tableName} WHERE ${idField} = ? AND wpId = ?`;
+             const [checkSector] = await connection.query(checkQuery, [uid, wpId]);
+             if (checkSector.length > 0 && checkSector[0][sectorField] === sectorNew) {
+                 return res.status(409).json({ success: false, error: `محصول از قبل در سکتور ${sectorNew} قرار دارد.` }); // 409 Conflict
+             } else if (checkSector.length === 0) {
+                  return res.status(404).json({ success: false, error: 'محصول در این مکان یافت نشد.' });
+             }
+            // Fallback error
+            return res.status(404).json({ success: false, error: `محصولی به جایی منتقل نشد. از تطبیق مکان کاری (${wpId}) با مکان محصول و عدم تکراری بودن سکتور (${sectorNew}) اطمینان حاصل فرمایید.` });
         }
+
+        await connection.commit();
+        console.log(`Placement successful for UID ${uid} to Sector ${sectorNew} in WP ${wpId}`);
+        res.status(200).json({ success: true, data: `محصول به سکتور ${sectorNew} منتقل شد` });
+
     } catch (error) {
-        console.error(`Error during placement for uid: ${uid}:`, error);
-        res.status(500).json({ success: false, error: `خطای داخلی سرور: ${String(error.message)}` });
+        if (connection) await connection.rollback();
+        console.error(`Error handling placement for UID ${uid}:`, error);
+        res.status(500).json({ success: false, error: `خطای پایگاه داده در هنگام ثبت جابجایی: ${String(error.message)}` });
+    } finally {
+        if (connection) connection.release();
     }
-    // No transaction needed for single update usually, but could be added for consistency if desired.
 };
 
 module.exports = {
