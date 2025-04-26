@@ -1,6 +1,3 @@
-
-const pool = require('../../warehouse-management-API/database');
-
 const mysql = require('mysql2/promise'); // Use promise wrapper
 
 // Load environment variables
