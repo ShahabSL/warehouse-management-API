@@ -30,8 +30,24 @@ The main application logic now resides within the `src/` directory:
     ```bash
     npm install
     ```
-3.  **Create a `.env` file:**
-    Copy the `.env.example` (if provided) or create a `.env` file in the project root and add the necessary environment variables:
+3.  **Set up the Database:**
+
+    *   **Prerequisites:** Ensure you have a MySQL server installed and running.
+    *   **Create Schema:** Use a MySQL client (like MySQL Workbench or the `mysql` command line) to connect to your server and run the schema definition file to create the necessary tables:
+        ```bash
+        # Example using mysql command line (replace <user>):
+        mysql -u <user> -p < database/schema.sql
+        ```
+        *(The `schema.sql` file already contains `CREATE DATABASE IF NOT EXISTS xicorana;` and `USE xicorana;`)*
+    *   **(Optional) Load Sample Data:** To populate the database with non-sensitive sample data for testing, run the sample data script:
+        ```bash
+        # Example using mysql command line (replace <user>):
+        mysql -u <user> -p xicorana < database/sample_data.sql
+        ```
+
+4.  **Create a `.env` file:**
+    Copy the `.env.example` (if provided) or create a `.env` file in the project root. Populate it with your specific environment variables, especially the database credentials (`DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`) and a strong `JWT_SECRET`.
+
     ```dotenv
     NODE_ENV=development
     PORT=5000
@@ -45,7 +61,9 @@ The main application logic now resides within the `src/` directory:
     # SMS_SECRET_KEY=your_sms_secret_key # Optional for SMS features
     # SMS_SENDER=your_sms_sender_number # Optional for SMS features
     ```
-4.  **Run the server:**
+    **Important:** Ensure `.env` is listed in your `.gitignore` file and is never committed to version control.
+
+5.  **Run the server:**
     ```bash
     npm start 
     # Or for development with nodemon (if configured):
