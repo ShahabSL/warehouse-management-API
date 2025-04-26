@@ -1,31 +1,73 @@
-# Project Overview
+# Warehouse Management API
 
-This project is implemented in a **single JavaScript file (~2400 lines)** due to specific requirements from the production team. While best practices in backend development typically encourage **modular architecture** (separating routes, controllers, and services into different files), this structure was intentionally chosen to meet the team's expectations.
+This project provides the backend API for a warehouse management system.
 
-## ⚠️ Why is Everything in One File?
-The decision to keep all logic within a single file was made by the **production team**. As a developer, I am fully aware of the benefits of modular architecture, including:
-- **Better Maintainability** – Easier to debug and update.
-- **Scalability** – Allows for project growth without becoming unmanageable.
-- **Code Reusability** – Shared logic across different parts of the application.
+## ✨ Project Structure (Post-Refactor)
 
-Despite these advantages, the project was required to follow a **single-file structure** as per production requirements.
+This project was **recently refactored** from a single monolithic JavaScript file (~2400 lines) into a modular structure following common Express.js conventions. The goal of this refactoring was to improve maintainability, scalability, and code organization.
 
-## 🔍 My Approach & Knowledge
-I have experience with industry-standard **Express.js application structuring**, which typically involves:
-- **Routes:** Handling API endpoints (`routes/`).
-- **Controllers:** Managing request logic (`controllers/`).
-- **Services:** Business logic and database interactions (`services/`).
-- **Middleware:** Authentication, logging, and security (`middleware/`).
+The main application logic now resides within the `src/` directory:
 
-However, since this project follows a **monolithic file structure**, any modifications should be made carefully to ensure stability.
+- **`src/`**: Contains all the core application code.
+  - **`config/`**: Database configuration (`db.js`).
+  - **`controllers/`**: Handles incoming requests, interacts with database logic (via the pool), and sends responses (e.g., `auth.controller.js`, `product.controller.js`).
+  - **`middleware/`**: Contains middleware functions, such as authentication (`auth.js`).
+  - **`routes/`**: Defines the API endpoints and links them to the appropriate controller functions (e.g., `auth.routes.js`, `product.routes.js`).
+  - **`app.js`**: The main Express application setup file. Configures middleware and mounts the various route modules.
+- **`server.js`**: Initializes and starts the Express server.
+- **`.env`**: Stores environment variables (database credentials, JWT secret, etc.). *Not committed to Git.*
+- **`package.json`**: Project dependencies and scripts.
+- **`README.md`**: This file.
 
-## 🔧 Future Improvements
-If refactoring this project in the future, a recommended approach would be:
-1. **Splitting routes, controllers, and services into separate modules.**
-2. **Implementing middleware for authentication and logging.**
-3. **Using environment variables for better configuration management.**
-4. **Adding proper error handling and unit tests.**
+## 🚀 Getting Started
 
-## 🚀 Final Notes
-This project structure was a **team decision**, not a lack of knowledge in best practices. If you have any questions or suggestions, feel free to contribute or reach out!
+1.  **Clone the repository:**
+    ```bash
+    git clone <repository-url>
+    cd <project-directory>
+    ```
+2.  **Install dependencies:**
+    ```bash
+    npm install
+    ```
+3.  **Create a `.env` file:**
+    Copy the `.env.example` (if provided) or create a `.env` file in the project root and add the necessary environment variables:
+    ```dotenv
+    NODE_ENV=development
+    PORT=5000
+    DB_HOST=your_db_host
+    DB_USER=your_db_user
+    DB_PASSWORD=your_db_password
+    DB_NAME=xicorana
+    # DB_CONNECTION_LIMIT=10 # Optional
+    JWT_SECRET=your_very_secret_jwt_key 
+    # SMS_API_KEY=your_sms_api_key # Optional for SMS features
+    # SMS_SECRET_KEY=your_sms_secret_key # Optional for SMS features
+    # SMS_SENDER=your_sms_sender_number # Optional for SMS features
+    ```
+4.  **Run the server:**
+    ```bash
+    npm start 
+    # Or for development with nodemon (if configured):
+    # npm run dev
+    ```
+
+## 📝 API Endpoints
+
+The API routes are defined in the `src/routes/` directory and mounted under `/api/v1` in `src/app.js`.
+Refer to the individual route files for specific endpoints related to:
+- Authentication (`auth.routes.js`)
+- Handheld Operations (`handheld.routes.js`)
+- Products & UIDs (`product.routes.js`)
+- Workplaces (`workplace.routes.js`)
+- Production Plans (`productionPlan.routes.js`)
+- Reports (`report.routes.js`)
+- Security/Herasat (`herasat.routes.js`)
+- Requests (`request.routes.js`)
+- Users (`user.routes.js`)
+
+## 🔧 Development Notes (Previous Structure)
+
+*Originally*, this project was implemented in a single JavaScript file (`warehouse-management-API/mainserver.js`) due to specific production team requirements at the time. While functional, this structure lacked the modularity and maintainability benefits of standard backend architectures.
+The recent refactoring addressed these points by moving to the structure described above.
 
