@@ -1,6 +1,6 @@
 const pool = require('../config/db');
 const axios = require('axios'); // For SMS sending
-const { v4: uuidv4 } = require('uuid');
+
 
 // Get Manufacturer Names
 const getManufacturerNames = async (req, res) => {
