@@ -4,7 +4,7 @@ This project provides the backend API for a warehouse management system.
 
 ## ✨ Project Structure (Post-Refactor)
 
-This project was **recently refactored** from a single monolithic JavaScript file (~2400 lines) into a modular structure following common Express.js conventions. The goal of this refactoring was to improve maintainability, scalability, and code organization.
+This project was **refactored** from a single monolithic JavaScript file (~2400 lines) into a modular structure following common Express.js conventions. The goal of this refactoring was to improve maintainability, scalability, and code organization.
 
 The main application logic now resides within the `src/` directory:
 
