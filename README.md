@@ -15,7 +15,7 @@ The main application logic now resides within the `src/` directory:
   - **`routes/`**: Defines the API endpoints and links them to the appropriate controller functions (e.g., `auth.routes.js`, `product.routes.js`).
   - **`app.js`**: The main Express application setup file. Configures middleware and mounts the various route modules.
 - **`server.js`**: Initializes and starts the Express server.
-- **`.env`**: Stores environment variables (database credentials, JWT secret, etc.). *Not committed to Git.*
+- **`.env`**: Stores environment variables (database credentials, JWT secret, etc.). *Not committed to Git.(Example is below)*
 - **`package.json`**: Project dependencies and scripts.
 - **`README.md`**: This file.
 
